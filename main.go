@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 
+	"github.com/dchest/captcha"
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
 	_ "github.com/go-sql-driver/mysql"
@@ -73,18 +74,52 @@ func DBSignIn(credentials Credentials) (User, error) {
 	return user, err
 }
 
+func GenerateCaptchaHandler(c *gin.Context) {
+	captchaId := captcha.New()
+	c.JSON(http.StatusOK, gin.H{"captchaId": captchaId})
+}
+
+func CaptchaImageHandler(c *gin.Context) {
+	captchaId := c.Param("captchaId")
+	if captchaId == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Captcha ID is required"})
+		return
+	}
+
+	c.Header("Content-Type", "image/png")
+	c.Header("Cache-Control", "no-cache, no-store, must-revalidate")
+	c.Header("Pragma", "no-cache")
+	c.Header("Expires", "0")
+
+	if err := captcha.WriteImage(c.Writer, captchaId, captcha.StdWidth, captcha.StdHeight); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to generate captcha image"})
+	}
+}
+
 func SignUpHandler(c *gin.Context) {
-	var user User
-	if err := c.ShouldBindJSON(&user); err != nil {
+	var request struct {
+		User
+		CaptchaId     string `json:"captchaId" binding:"required"`
+		CaptchaAnswer string `json:"captchaAnswer" binding:"required"`
+	}
+
+	if err := c.ShouldBindJSON(&request); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	err := DBSignUp(user)
+
+	if !captcha.VerifyString(request.CaptchaId, request.CaptchaAnswer) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid captcha"})
+		return
+	}
+
+	err := DBSignUp(request.User)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"message": "User created successfully"})
+
+	c.JSON(http.StatusCreated, gin.H{"message": "User registered successfully"})
 }
 
 func SignInHandler(c *gin.Context) {
@@ -119,6 +154,8 @@ func main() {
 		AllowCredentials: true,
 	}
 	router.Use(cors.New(config))
+	router.GET("/api/captcha", GenerateCaptchaHandler)
+	router.GET("/api/captcha/:captchaId", CaptchaImageHandler)
 	router.POST("/api/users", SignUpHandler)
 	router.POST("/api/users/signin", SignInHandler)
 	router.Run("localhost:8080")
