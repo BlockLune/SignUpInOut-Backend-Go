@@ -106,6 +106,8 @@ func main() {
 		panic(err)
 	}
 
+	DBInit()
+
 	router := gin.Default()
 	router.POST("/api/users", SignUpHandler)
 	router.POST("/api/users/signin", SignInHandler)
